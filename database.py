@@ -1,17 +1,29 @@
 """
 database.py - VERSION CON FIREBASE FIRESTORE
-Las citas y conversaciones se guardan en la nube permanentemente.
+Lee credenciales desde variable de entorno (producción en Render)
+o desde archivo local (desarrollo en tu PC).
 """
+import json
 import random
 import string
+import tempfile
+import os
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
-from config import FIREBASE_CREDENTIALS
+from config import FIREBASE_CREDENTIALS, FIREBASE_CREDENTIALS_JSON
 
 # Inicializa Firebase solo una vez
 if not firebase_admin._apps:
-    cred = credentials.Certificate(FIREBASE_CREDENTIALS)
+    if FIREBASE_CREDENTIALS_JSON:
+        # Producción: lee desde variable de entorno (Render)
+        cred_dict = json.loads(FIREBASE_CREDENTIALS_JSON)
+        cred = credentials.Certificate(cred_dict)
+        print("✅ Firebase inicializado desde variable de entorno")
+    else:
+        # Desarrollo: lee desde archivo local
+        cred = credentials.Certificate(FIREBASE_CREDENTIALS)
+        print("✅ Firebase inicializado desde archivo local")
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()

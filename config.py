@@ -19,6 +19,7 @@ OPENAI_MODEL     = "gpt-4o-mini"
 
 # ── Firebase ────────────────────────────────────────────
 FIREBASE_CREDENTIALS = os.getenv("FIREBASE_CREDENTIALS", "firebase_credentials.json")
+FIREBASE_CREDENTIALS_JSON = os.getenv("FIREBASE_CREDENTIALS_JSON", "")
 
 # ── App ─────────────────────────────────────────────────
 APP_ENV = os.getenv("APP_ENV", "development")
