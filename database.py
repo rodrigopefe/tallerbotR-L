@@ -1,36 +1,48 @@
 """
 database.py - VERSION CON FIREBASE FIRESTORE
-Lee credenciales desde variable de entorno (producción en Render)
+Lee credenciales desde variable de entorno (producción en Railway/Render)
 o desde archivo local (desarrollo en tu PC).
 """
 import json
 import random
 import string
-import tempfile
 import os
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
-from config import FIREBASE_CREDENTIALS, FIREBASE_CREDENTIALS_JSON
+
+# Leer variables directamente con os.getenv
+FIREBASE_CREDENTIALS_JSON = os.environ.get("FIREBASE_CREDENTIALS_JSON", "")
+FIREBASE_CREDENTIALS = os.environ.get("FIREBASE_CREDENTIALS", "firebase_credentials.json")
+
+print(f"🔍 FIREBASE_CREDENTIALS_JSON presente: {bool(FIREBASE_CREDENTIALS_JSON)}")
+print(f"🔍 FIREBASE_CREDENTIALS_JSON longitud: {len(FIREBASE_CREDENTIALS_JSON)}")
+print(f"🔍 FIREBASE_CREDENTIALS: {FIREBASE_CREDENTIALS}")
 
 # Inicializa Firebase solo una vez
 if not firebase_admin._apps:
-    if FIREBASE_CREDENTIALS_JSON:
-        # Producción: lee desde variable de entorno (Render)
-        cred_dict = json.loads(FIREBASE_CREDENTIALS_JSON)
-        cred = credentials.Certificate(cred_dict)
-        print("✅ Firebase inicializado desde variable de entorno")
+    if FIREBASE_CREDENTIALS_JSON and len(FIREBASE_CREDENTIALS_JSON) > 10:
+        try:
+            cred_dict = json.loads(FIREBASE_CREDENTIALS_JSON)
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            print("✅ Firebase inicializado desde variable de entorno")
+        except Exception as e:
+            print(f"❌ Error inicializando Firebase desde variable: {e}")
+            raise
     else:
-        # Desarrollo: lee desde archivo local
-        cred = credentials.Certificate(FIREBASE_CREDENTIALS)
-        print("✅ Firebase inicializado desde archivo local")
-    firebase_admin.initialize_app(cred)
+        try:
+            cred = credentials.Certificate(FIREBASE_CREDENTIALS)
+            firebase_admin.initialize_app(cred)
+            print("✅ Firebase inicializado desde archivo local")
+        except Exception as e:
+            print(f"❌ Error inicializando Firebase desde archivo: {e}")
+            raise
 
 db = firestore.client()
 
 
 def _generar_folio() -> str:
-    """Genera un folio único tipo TLR-A3X9."""
     letras = random.choices(string.ascii_uppercase, k=2)
     numeros = random.choices(string.digits, k=2)
     sufijo = "".join(letras + numeros)
@@ -40,7 +52,6 @@ def _generar_folio() -> str:
 # ── Citas ────────────────────────────────────────────────
 
 def guardar_cita(telefono: str, datos: dict) -> str:
-    """Guarda una nueva cita en Firestore y devuelve el folio."""
     folio = _generar_folio()
     doc = {
         **datos,
@@ -51,18 +62,16 @@ def guardar_cita(telefono: str, datos: dict) -> str:
         "fecha_actualizacion": datetime.now().isoformat(),
     }
     db.collection("citas").document(folio).set(doc)
-    print(f"✅ Cita guardada en Firebase: {folio} — {datos.get('aparato')} para {datos.get('nombre')}")
+    print(f"✅ Cita guardada: {folio}")
     return folio
 
 
 def consultar_cita(folio: str) -> dict | None:
-    """Busca una cita por folio. Devuelve None si no existe."""
     doc = db.collection("citas").document(folio.upper().strip()).get()
     return doc.to_dict() if doc.exists else None
 
 
 def consultar_cita_por_telefono(telefono: str) -> list[dict]:
-    """Devuelve todas las citas activas de un número de teléfono."""
     try:
         docs = (
             db.collection("citas")
@@ -72,12 +81,11 @@ def consultar_cita_por_telefono(telefono: str) -> list[dict]:
         )
         return [d.to_dict() for d in docs]
     except Exception as e:
-        print(f"⚠️ Error consultando citas por teléfono: {e}")
+        print(f"⚠️ Error consultando citas: {e}")
         return []
 
 
 def actualizar_estado(folio: str, nuevo_estado: str) -> bool:
-    """Actualiza el estado de una cita. Usado por el técnico del taller."""
     ref = db.collection("citas").document(folio.upper())
     doc = ref.get()
     if not doc.exists:
@@ -86,12 +94,10 @@ def actualizar_estado(folio: str, nuevo_estado: str) -> bool:
         "estado": nuevo_estado,
         "fecha_actualizacion": datetime.now().isoformat(),
     })
-    print(f"🔄 Folio {folio} → estado: {nuevo_estado}")
     return True
 
 
 def guardar_garantia(datos: dict) -> str:
-    """Guarda una consulta de garantía en Firestore."""
     folio = f"GAR-{''.join(random.choices(string.ascii_uppercase + string.digits, k=4))}"
     doc = {
         **datos,
@@ -100,14 +106,12 @@ def guardar_garantia(datos: dict) -> str:
         "atendido": False,
     }
     db.collection("garantias").document(folio).set(doc)
-    print(f"🛡️ Garantía guardada en Firebase: {folio}")
     return folio
 
 
 # ── Conversaciones ───────────────────────────────────────
 
 def guardar_estado_conversacion(telefono: str, estado: dict) -> None:
-    """Persiste el estado de la conversación en Firestore."""
     try:
         db.collection("conversaciones").document(telefono).set({
             **estado,
@@ -118,7 +122,6 @@ def guardar_estado_conversacion(telefono: str, estado: dict) -> None:
 
 
 def obtener_estado_conversacion(telefono: str) -> dict:
-    """Obtiene el estado actual de la conversación."""
     try:
         doc = db.collection("conversaciones").document(telefono).get()
         return doc.to_dict() if doc.exists else {}
@@ -128,7 +131,6 @@ def obtener_estado_conversacion(telefono: str) -> dict:
 
 
 def limpiar_conversacion(telefono: str) -> None:
-    """Resetea la conversación cuando termina el flujo."""
     try:
         db.collection("conversaciones").document(telefono).delete()
     except Exception as e:
