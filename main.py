@@ -130,3 +130,16 @@ async def recibir_mensaje(request: Request):
         logger.error(f"Error procesando mensaje: {e}", exc_info=True)
         print(f"ERROR DETALLADO: {e}")
         return {"status": "error"}
+
+
+# ── Endpoint prueba de correo ─────────────────────────────
+
+@app.get("/test-correo")
+async def test_correo():
+    """Endpoint temporal para probar el correo manualmente."""
+    try:
+        from email_service import enviar_correo_diario
+        resultado = await enviar_correo_diario()
+        return {"status": "ok" if resultado else "error", "mensaje": "Correo enviado" if resultado else "Error al enviar"}
+    except Exception as e:
+        return {"status": "error", "detalle": str(e)}
