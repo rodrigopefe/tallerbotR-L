@@ -287,13 +287,41 @@ async def _flujo_seguimiento(telefono: str, mensaje: str, estado: dict) -> None:
     paso = estado.get("paso", "pregunta_garantia")
 
     if paso == "pregunta_garantia":
-        msg_lower = mensaje.lower()
+        msg_lower = mensaje.lower().strip()
 
-        if mensaje == "seg_si_garantia" or any(p in msg_lower for p in ["si", "garantia"]):
+        # Primero verificar ID exacto del boton
+        if mensaje == "seg_si_garantia":
             await _iniciar_garantia(telefono)
             return
 
-        if mensaje == "seg_no_garantia" or "no" in msg_lower:
+        if mensaje == "seg_no_garantia":
+            guardar_estado_conversacion(telefono, {
+                "flujo": "seguimiento",
+                "paso": "folio_normal",
+            })
+            citas = consultar_cita_por_telefono(telefono)
+            if citas:
+                if len(citas) == 1:
+                    await _mostrar_estado_cita(telefono, citas[0])
+                    limpiar_conversacion(telefono)
+                else:
+                    lista = "\n".join([f"Orden {c['folio']} - {c['aparato']}" for c in citas])
+                    await send_message(telefono,
+                        f"Encontre estos servicios:\n\n{lista}\n\n"
+                        "De cual necesitas seguimiento? Escribe el numero de orden."
+                    )
+            else:
+                await send_message(telefono,
+                    "Escribe tu numero de orden para consultar tu servicio."
+                )
+            return
+
+        # Si escribio texto libre
+        if msg_lower in {"si", "si garantia", "garantia"}:
+            await _iniciar_garantia(telefono)
+            return
+
+        if msg_lower in {"no", "no garantia", "normal", "servicio normal"}:
             guardar_estado_conversacion(telefono, {
                 "flujo": "seguimiento",
                 "paso": "folio_normal",
