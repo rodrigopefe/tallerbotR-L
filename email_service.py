@@ -1,32 +1,24 @@
 """
 email_service.py
-Correo automático diario con resumen de servicios agendados.
-Se envía a las 5pm con los servicios del día siguiente.
-
-Variables de entorno necesarias en Railway:
-  EMAIL_USER    → tu correo Gmail (ej: tallerbot@gmail.com)
-  EMAIL_PASS    → contraseña de aplicación de Gmail (no tu password normal)
-  EMAIL_DESTINO → correo destino (rodrigo.pefe@live.com)
+Correo automatico diario usando SendGrid API.
+Se envia a las 5pm con los servicios del dia siguiente.
 """
-import smtplib
 import os
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import json
+import urllib.request
+import urllib.error
 from datetime import datetime, timedelta
 from database import obtener_citas_del_dia
 
-# ── Configuración ─────────────────────────────────────────
-CORREO_ORIGEN  = os.environ.get("EMAIL_USER", "")
-CORREO_PASS    = os.environ.get("EMAIL_PASS", "")
-CORREO_DESTINO = os.environ.get("EMAIL_DESTINO", "rodrigo.pefe@live.com")
+SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "")
+CORREO_ORIGEN    = os.environ.get("EMAIL_USER", "tallerlg.bot@gmail.com")
+CORREO_DESTINO   = os.environ.get("EMAIL_DESTINO", "rodrigo.pefe@live.com")
 
 
 def _formato_orden(cita: dict) -> str:
-    """Genera el bloque de texto de una orden en el formato del taller."""
-    obs    = cita.get("observacion", "")
-    cargo  = cita.get("cargo", "")
-
-    separador = "-" * 60
+    obs   = cita.get("observacion", "")
+    cargo = cita.get("cargo", "")
+    sep   = "-" * 60
     lineas = [
         f"NOMBRE    | {cita.get('nombre', '-')}",
         f"DIRECCION | {cita.get('direccion', '-')}",
@@ -36,11 +28,10 @@ def _formato_orden(cita: dict) -> str:
         f"OBSERV.   | {obs}",
         f"CITA      | {cita.get('fecha', '-')}    {cargo}",
     ]
-    return f"No. ORDEN: {cita.get('folio', '-')}\n{separador}\n" + "\n".join(lineas) + f"\n{separador}\n"
+    return f"No. ORDEN: {cita.get('folio', '-')}\n{sep}\n" + "\n".join(lineas) + f"\n{sep}\n"
 
 
-def _generar_cuerpo_correo(citas: list[dict], fecha_display: str) -> str:
-    """Genera el cuerpo completo del correo."""
+def _generar_cuerpo(citas: list, fecha_display: str) -> str:
     if not citas:
         return (
             f"REFRIGERACION Y LAVADORAS LG\n"
@@ -48,7 +39,6 @@ def _generar_cuerpo_correo(citas: list[dict], fecha_display: str) -> str:
             f"{'='*60}\n\n"
             f"No hay servicios agendados para este dia.\n"
         )
-
     encabezado = (
         f"REFRIGERACION Y LAVADORAS LG\n"
         f"SERVICIOS AGENDADOS PARA: {fecha_display}\n"
@@ -57,38 +47,65 @@ def _generar_cuerpo_correo(citas: list[dict], fecha_display: str) -> str:
     )
     bloques = "\n".join([_formato_orden(c) for c in citas])
     pie = f"\n{'='*60}\nGenerado automaticamente por TallerBot"
-
     return encabezado + bloques + pie
 
 
 async def enviar_correo_diario():
-    """
-    Envía el correo con los servicios agendados para mañana.
-    Se llama automáticamente a las 5pm desde main.py.
-    """
-    if not CORREO_ORIGEN or not CORREO_PASS:
-        print("Correo no configurado - faltan EMAIL_USER o EMAIL_PASS en variables de entorno")
+    print(f"Iniciando envio de correo via SendGrid...")
+    print(f"SENDGRID_API_KEY configurado: {bool(SENDGRID_API_KEY)}")
+    print(f"CORREO_ORIGEN: {CORREO_ORIGEN}")
+    print(f"CORREO_DESTINO: {CORREO_DESTINO}")
+
+    if not SENDGRID_API_KEY:
+        print("ERROR: Falta SENDGRID_API_KEY")
         return False
 
     manana        = datetime.now() + timedelta(days=1)
     fecha_manana  = manana.strftime("%Y-%m-%d")
     fecha_display = manana.strftime("%d/%m/%Y")
 
+    print(f"Obteniendo citas para: {fecha_manana}")
     citas  = obtener_citas_del_dia(fecha_manana)
-    cuerpo = _generar_cuerpo_correo(citas, fecha_display)
+    print(f"Citas encontradas: {len(citas)}")
 
-    msg = MIMEMultipart()
-    msg["From"]    = CORREO_ORIGEN
-    msg["To"]      = CORREO_DESTINO
-    msg["Subject"] = f"Servicios {fecha_display} - Refrigeracion y Lavadoras LG ({len(citas)} ordenes)"
-    msg.attach(MIMEText(cuerpo, "plain", "utf-8"))
+    cuerpo = _generar_cuerpo(citas, fecha_display)
+    asunto = f"Servicios {fecha_display} - Refrigeracion y Lavadoras LG ({len(citas)} ordenes)"
+
+    # Payload SendGrid
+    payload = {
+        "personalizations": [{
+            "to": [{"email": CORREO_DESTINO}],
+            "subject": asunto
+        }],
+        "from": {
+            "email": CORREO_ORIGEN,
+            "name": "Refrigeracion y Lavadoras LG"
+        },
+        "content": [{
+            "type": "text/plain",
+            "value": cuerpo
+        }]
+    }
+
+    data = json.dumps(payload).encode("utf-8")
+    req  = urllib.request.Request(
+        "https://api.sendgrid.com/v3/mail/send",
+        data=data,
+        headers={
+            "Authorization": f"Bearer {SENDGRID_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST"
+    )
 
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as servidor:
-            servidor.login(CORREO_ORIGEN, CORREO_PASS)
-            servidor.sendmail(CORREO_ORIGEN, CORREO_DESTINO, msg.as_string())
-        print(f"Correo enviado a {CORREO_DESTINO} - {len(citas)} servicios para {fecha_display}")
-        return True
+        with urllib.request.urlopen(req, timeout=30) as response:
+            print(f"Correo enviado exitosamente. Status: {response.status}")
+            return True
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        print(f"ERROR SendGrid HTTP {e.code}: {body}")
+        return False
     except Exception as e:
-        print(f"Error enviando correo: {e}")
+        print(f"ERROR general: {e}")
         return False
