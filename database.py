@@ -104,17 +104,19 @@ def consultar_cita_por_telefono(telefono: str) -> list[dict]:
 def consultar_historial_cliente(telefono: str, limite: int = 3) -> list[dict]:
     """
     Obtiene los últimos N servicios del cliente (incluyendo entregados).
-    Ordenados del más reciente al más antiguo.
+    Sin order_by para evitar requerir índice compuesto en Firebase.
     """
     try:
         docs = (
             db.collection("citas")
             .where("telefono", "==", telefono)
-            .order_by("fecha_creacion", direction=firestore.Query.DESCENDING)
-            .limit(limite)
             .stream()
         )
-        return [d.to_dict() for d in docs]
+        resultados = [d.to_dict() for d in docs]
+        print(f"Historial encontrado para {telefono}: {len(resultados)} servicios")
+        # Ordenar en Python por fecha_creacion descendente
+        resultados.sort(key=lambda x: x.get("fecha_creacion", ""), reverse=True)
+        return resultados[:limite]
     except Exception as e:
         print(f"Error consultando historial: {e}")
         return []
