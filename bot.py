@@ -67,7 +67,7 @@ FAQ_RESPUESTAS = {
 GARANTIAS_VALIDAS = {"lg", "milenia", "assurant", "garanplus", "supra"}
 
 # Número del taller para notificaciones
-NUMERO_TALLER = "5212201330759"
+NUMERO_TALLER = "522201330759"
 
 ESTADOS_TEXTO = {
     "pendiente":           "Pendiente de visita",
