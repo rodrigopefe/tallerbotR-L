@@ -33,7 +33,7 @@ async def tarea_correo_diario():
         hoy = ahora.strftime("%Y-%m-%d")
 
         # Enviar a las 17:00 (5pm) una vez por día
-        if ahora.hour == 17 and ahora.minute == 0 and correo_enviado_hoy != hoy:
+        if ahora.hour == 23 and ahora.minute == 0 and correo_enviado_hoy != hoy:  # 23 UTC = 5pm Mexico Centro
             try:
                 from email_service import enviar_correo_diario
                 await enviar_correo_diario()
