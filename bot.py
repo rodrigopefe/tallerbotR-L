@@ -32,6 +32,14 @@ MSG_AGENTE = (
     "Horario de atencion: lunes a viernes 9am-5pm, sabados 9am-2pm."
 )
 
+MSG_ESPERA_COTIZACION = (
+    "Listo, recibimos tu solicitud.\n\n"
+    "Un tecnico revisara la disponibilidad y precio de la refaccion "
+    "y te respondera en este chat a la brevedad.\n\n"
+    "Si es fuera de horario, te contactamos en cuanto abramos "
+    "(lun-vie 9am-5pm, sab 9am-2pm)."
+)
+
 MSG_ESPERA_GARANTIA = (
     "Listo, recibimos tu solicitud.\n\n"
     "Un tecnico revisara el estado de tu garantia y te respondera "
@@ -42,6 +50,7 @@ MSG_ESPERA_GARANTIA = (
 
 MENU_OPCIONES = [
     {"id": "agendar",     "title": "Agendar cita",         "description": "Servicio con cargo a domicilio"},
+    {"id": "cotizar",     "title": "Cotizar",               "description": "Revision de equipo o refaccion"},
     {"id": "seguimiento", "title": "Seguimiento",           "description": "Revisa tu servicio o garantia"},
     {"id": "faq",         "title": "Preguntas frecuentes",  "description": "Garantias, marcas, tiempos"},
     {"id": "agente",      "title": "Hablar con tecnico",    "description": "Atencion personalizada"},
@@ -56,6 +65,9 @@ FAQ_RESPUESTAS = {
 }
 
 GARANTIAS_VALIDAS = {"lg", "milenia", "assurant", "garanplus", "supra"}
+
+# Número del taller para notificaciones
+NUMERO_TALLER = "5212201330759"
 
 ESTADOS_TEXTO = {
     "pendiente":           "Pendiente de visita",
@@ -162,6 +174,14 @@ async def manejar_mensaje(telefono: str, mensaje: str) -> None:
         await _flujo_cotizar(telefono, mensaje, estado)
         return
 
+    if flujo == "cotizar_refaccion":
+        await _flujo_cotizar_refaccion(telefono, mensaje, estado)
+        return
+
+    if flujo == "transferir":
+        await _flujo_transferir(telefono, mensaje, estado)
+        return
+
     # Detectar intención con IA
     intencion = await detectar_intencion(mensaje)
 
@@ -176,7 +196,7 @@ async def manejar_mensaje(telefono: str, mensaje: str) -> None:
     elif intencion == "faq":
         await _responder_faq(telefono, mensaje)
     elif intencion == "agente":
-        await send_message(telefono, MSG_AGENTE)
+        await _transferir_a_tecnico(telefono)
     else:
         hist = estado.get("historial", [])
         respuesta = await responder(hist, mensaje)
@@ -445,37 +465,170 @@ async def _flujo_garantia(telefono: str, mensaje: str, estado: dict) -> None:
 # ── Flujo: Cotizar ────────────────────────────────────────
 
 async def _iniciar_cotizar(telefono: str) -> None:
-    guardar_estado_conversacion(telefono, {"flujo": "cotizar", "paso": "aparato"})
-    await send_message(telefono,
-        "Cotizacion de reparacion\n\n"
-        "Que aparato necesitas reparar?\n"
-        "(ej: lavadora, refrigerador, pantalla...)"
+    await send_interactive_menu(telefono,
+        "Que tipo de cotizacion necesitas?",
+        [
+            {"id": "cotizar_revision",   "title": "Revision de equipo"},
+            {"id": "cotizar_refaccion",  "title": "Cotizar refaccion"},
+        ]
     )
 
 
 async def _flujo_cotizar(telefono: str, mensaje: str, estado: dict) -> None:
-    paso = estado.get("paso", "aparato")
-    if paso == "aparato":
-        precio = _precio_por_aparato(mensaje)
-        guardar_estado_conversacion(telefono, {**estado, "paso": "falla", "aparato": mensaje})
-        await send_message(telefono,
-            f"Entendido, *{mensaje}*.\n"
-            f"El costo del servicio es *{precio}* (incluye diagnostico y mano de obra).\n\n"
-            "Cual es la falla o problema que presenta?"
-        )
-    elif paso == "falla":
-        aparato   = estado.get("aparato", "el aparato")
-        consulta  = f"El cliente tiene un {aparato} con este problema: {mensaje}. Da informacion orientativa sobre la reparacion."
-        respuesta = await responder([], consulta)
+    msg_lower = mensaje.lower()
+
+    if mensaje == "cotizar_revision" or "revision" in msg_lower:
         limpiar_conversacion(telefono)
-        await send_message(telefono, respuesta)
+        await send_message(telefono,
+            "Costos de revision de equipo a domicilio:\n\n"
+            "Lavadora: *$450 MXN*\n"
+            "Refrigerador: *$550 MXN*\n"
+            "Pantalla / TV: *$450 MXN*\n"
+            "Estufa: *$450 MXN*\n"
+            "Secadora: *$450 MXN*\n\n"
+            "El costo de revision incluye diagnostico y mano de obra. "
+            "Si se requiere refaccion se cotiza aparte."
+        )
         await send_interactive_menu(telefono,
-            "Te gustaria agendar una visita?",
+            "Te gustaria agendar una visita de revision?",
             [
                 {"id": "si_agendar", "title": "Si, agendar"},
                 {"id": "no_gracias", "title": "No por ahora"},
             ]
         )
+        return
+
+    if mensaje == "cotizar_refaccion" or "refaccion" in msg_lower:
+        await _iniciar_cotizar_refaccion(telefono)
+        return
+
+    # Si no reconoce, mostrar opciones de nuevo
+    await send_interactive_menu(telefono,
+        "Que tipo de cotizacion necesitas?",
+        [
+            {"id": "cotizar_revision",  "title": "Revision de equipo"},
+            {"id": "cotizar_refaccion", "title": "Cotizar refaccion"},
+        ]
+    )
+
+
+# ── Flujo: Cotizar refacción ──────────────────────────────
+
+async def _iniciar_cotizar_refaccion(telefono: str) -> None:
+    guardar_estado_conversacion(telefono, {
+        "flujo": "cotizar_refaccion",
+        "paso": "numero_parte",
+        "datos": {"telefono": telefono},
+    })
+    await send_interactive_menu(telefono,
+        "Cotizacion de refaccion\n\nTienes el numero de parte de la refaccion?",
+        [
+            {"id": "tiene_numero_parte", "title": "Si, tengo el numero"},
+            {"id": "no_numero_parte",    "title": "No, solo el modelo"},
+        ]
+    )
+
+
+async def _flujo_cotizar_refaccion(telefono: str, mensaje: str, estado: dict) -> None:
+    paso  = estado.get("paso", "numero_parte")
+    datos = estado.get("datos", {"telefono": telefono})
+
+    if paso == "numero_parte":
+        if mensaje == "tiene_numero_parte":
+            guardar_estado_conversacion(telefono, {**estado, "paso": "capturar_numero_parte", "datos": datos})
+            await send_message(telefono, "Escribe el numero de parte de la refaccion:")
+        elif mensaje == "no_numero_parte":
+            guardar_estado_conversacion(telefono, {**estado, "paso": "modelo_equipo", "datos": datos})
+            await send_message(telefono,
+                "Escribe el modelo de tu equipo y la pieza que necesitas.\n"
+                "(ej: Lavadora LG WM1234 - bomba de agua)"
+            )
+        return
+
+    elif paso == "capturar_numero_parte":
+        datos["numero_parte"] = mensaje.upper()
+        datos["tiene_numero_parte"] = True
+        guardar_estado_conversacion(telefono, {**estado, "paso": "nombre_cliente", "datos": datos})
+        await send_message(telefono, "Cual es tu nombre completo?")
+
+    elif paso == "modelo_equipo":
+        datos["modelo_equipo"] = mensaje.upper()
+        datos["tiene_numero_parte"] = False
+        guardar_estado_conversacion(telefono, {**estado, "paso": "nombre_cliente", "datos": datos})
+        await send_message(telefono, "Cual es tu nombre completo?")
+
+    elif paso == "nombre_cliente":
+        datos["nombre"] = mensaje.upper()
+        guardar_estado_conversacion(telefono, {**estado, "paso": "telefono_cliente", "datos": datos})
+        await send_message(telefono, "Cual es tu numero de telefono de contacto?")
+
+    elif paso == "telefono_cliente":
+        datos["telefono_contacto"] = mensaje
+        limpiar_conversacion(telefono)
+
+        # Armar mensaje para el taller
+        if datos.get("tiene_numero_parte"):
+            detalle = f"No. de parte: {datos.get('numero_parte', '-')}"
+        else:
+            detalle = f"Modelo/pieza: {datos.get('modelo_equipo', '-')}"
+
+        msg_taller = (
+            f"COTIZACION DE REFACCION\n"
+            f"{'='*30}\n"
+            f"Cliente: {datos.get('nombre', '-')}\n"
+            f"Telefono: {datos.get('telefono_contacto', '-')}\n"
+            f"{detalle}\n"
+            f"{'='*30}\n"
+            f"Responder al cliente por WhatsApp: {telefono}"
+        )
+
+        # Notificar al taller
+        await send_message(NUMERO_TALLER, msg_taller)
+
+        # Confirmar al cliente
+        await send_message(telefono, MSG_ESPERA_COTIZACION)
+
+
+# ── Transferir a técnico ─────────────────────────────────
+
+async def _transferir_a_tecnico(telefono: str) -> None:
+    guardar_estado_conversacion(telefono, {
+        "flujo": "transferir",
+        "paso": "nombre",
+        "datos": {"telefono": telefono},
+    })
+    await send_message(telefono,
+        "Con gusto te comunicamos con un tecnico.\n\n"
+        "Cual es tu nombre completo?"
+    )
+
+
+async def _flujo_transferir(telefono: str, mensaje: str, estado: dict) -> None:
+    paso  = estado.get("paso", "nombre")
+    datos = estado.get("datos", {"telefono": telefono})
+
+    if paso == "nombre":
+        datos["nombre"] = mensaje.upper()
+        guardar_estado_conversacion(telefono, {**estado, "paso": "telefono_contacto", "datos": datos})
+        await send_message(telefono, "Cual es tu numero de telefono de contacto?")
+
+    elif paso == "telefono_contacto":
+        datos["telefono_contacto"] = mensaje
+        limpiar_conversacion(telefono)
+
+        # Notificar al taller
+        msg_taller = (
+            f"CLIENTE SOLICITA ATENCION PERSONALIZADA\n"
+            f"{'='*30}\n"
+            f"Nombre: {datos.get('nombre', '-')}\n"
+            f"Telefono contacto: {datos.get('telefono_contacto', '-')}\n"
+            f"WhatsApp: {telefono}\n"
+            f"{'='*30}\n"
+            f"Responder al cliente: {telefono}"
+        )
+        await send_message(NUMERO_TALLER, msg_taller)
+
+        await send_message(telefono, MSG_AGENTE)
 
 
 # ── Preguntas frecuentes ──────────────────────────────────
