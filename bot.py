@@ -6,6 +6,8 @@ Lógica central del chatbot — Refrigeración y Lavadoras LG
 - Garantías solo hacen seguimiento
 - Formato folio: DDMMAA-XXXX
 - Horarios: lun-vie 9am-5pm, sáb 9am-2pm
+- Notificación al taller al agendar y al transferir
+- Mensaje de despedida al finalizar
 """
 from whatsapp import send_message, send_list_menu, send_interactive_menu
 from database import (
@@ -20,7 +22,9 @@ from database import (
 )
 from ai import responder, detectar_intencion
 
-# ── Mensajes fijos ────────────────────────────────────────
+# ── Constantes ────────────────────────────────────────────
+
+NUMERO_TALLER = "522201330759"
 
 MSG_BIENVENIDA_NUEVO = (
     "Hola! Soy el asistente de *Refrigeracion y Lavadoras LG*.\n\n"
@@ -32,14 +36,6 @@ MSG_AGENTE = (
     "Horario de atencion: lunes a viernes 9am-5pm, sabados 9am-2pm."
 )
 
-MSG_ESPERA_COTIZACION = (
-    "Listo, recibimos tu solicitud.\n\n"
-    "Un tecnico revisara la disponibilidad y precio de la refaccion "
-    "y te respondera en este chat a la brevedad.\n\n"
-    "Si es fuera de horario, te contactamos en cuanto abramos "
-    "(lun-vie 9am-5pm, sab 9am-2pm)."
-)
-
 MSG_ESPERA_GARANTIA = (
     "Listo, recibimos tu solicitud.\n\n"
     "Un tecnico revisara el estado de tu garantia y te respondera "
@@ -48,12 +44,25 @@ MSG_ESPERA_GARANTIA = (
     "(lun-vie 9am-5pm, sab 9am-2pm)."
 )
 
+MSG_ESPERA_COTIZACION = (
+    "Listo, recibimos tu solicitud.\n\n"
+    "Un tecnico revisara la disponibilidad y precio de la refaccion "
+    "y te respondera en este chat a la brevedad.\n\n"
+    "Si es fuera de horario, te contactamos en cuanto abramos "
+    "(lun-vie 9am-5pm, sab 9am-2pm)."
+)
+
+MSG_DESPEDIDA = (
+    "Gracias por contactarnos. Quedamos a tus ordenes.\n"
+    "Que tengas un excelente dia! *Refrigeracion y Lavadoras LG*."
+)
+
 MENU_OPCIONES = [
-    {"id": "agendar",     "title": "Agendar cita",         "description": "Servicio con cargo a domicilio"},
-    {"id": "cotizar",     "title": "Cotizar",               "description": "Revision de equipo o refaccion"},
-    {"id": "seguimiento", "title": "Seguimiento",           "description": "Revisa tu servicio o garantia"},
-    {"id": "faq",         "title": "Preguntas frecuentes",  "description": "Garantias, marcas, tiempos"},
-    {"id": "agente",      "title": "Hablar con tecnico",    "description": "Atencion personalizada"},
+    {"id": "agendar",     "title": "Agendar cita",        "description": "Servicio con cargo a domicilio"},
+    {"id": "cotizar",     "title": "Cotizar",              "description": "Revision de equipo o refaccion"},
+    {"id": "seguimiento", "title": "Seguimiento",          "description": "Revisa tu servicio o garantia"},
+    {"id": "faq",         "title": "Preguntas frecuentes", "description": "Garantias, marcas, tiempos"},
+    {"id": "agente",      "title": "Hablar con tecnico",   "description": "Atencion personalizada"},
 ]
 
 FAQ_RESPUESTAS = {
@@ -66,9 +75,6 @@ FAQ_RESPUESTAS = {
 
 GARANTIAS_VALIDAS = {"lg", "milenia", "assurant", "garanplus", "supra"}
 
-# Número del taller para notificaciones
-NUMERO_TALLER = "522201330759"
-
 ESTADOS_TEXTO = {
     "pendiente":           "Pendiente de visita",
     "en_diagnostico":      "En diagnostico",
@@ -77,8 +83,19 @@ ESTADOS_TEXTO = {
     "entregado":           "Entregado",
 }
 
+PALABRAS_DESPEDIDA = {
+    "ok", "gracias", "ok gracias", "hasta luego", "adios", "bye",
+    "muchas gracias", "listo", "de acuerdo", "perfecto", "excelente",
+    "okey", "👍", "entendido", "ya", "bien"
+}
 
-# ── Utilidad: normalizar número México ───────────────────
+PALABRAS_SALUDO = {
+    "menu", "inicio", "hola", "hi", "buenas", "buenos dias",
+    "buenas tardes", "buenas noches", "empezar"
+}
+
+
+# ── Utilidades ────────────────────────────────────────────
 
 def _normalizar_telefono(telefono: str) -> str:
     if telefono.startswith("5212") and len(telefono) == 13:
@@ -87,16 +104,12 @@ def _normalizar_telefono(telefono: str) -> str:
     return telefono
 
 
-# ── Utilidad: precio por aparato ─────────────────────────
-
 def _precio_por_aparato(aparato: str) -> str:
     aparato_lower = aparato.lower()
     if "refri" in aparato_lower or "refriger" in aparato_lower:
         return "$550.00"
     return "$450.00"
 
-
-# ── Utilidad: notificar al taller ────────────────────────
 
 async def _notificar_taller_garantia(datos: dict) -> None:
     print("\n" + "="*50)
@@ -109,28 +122,21 @@ async def _notificar_taller_garantia(datos: dict) -> None:
     print("="*50 + "\n")
 
 
-# ── Saludo personalizado con historial ────────────────────
+# ── Saludo personalizado ──────────────────────────────────
 
 async def _saludo_con_historial(telefono: str) -> None:
-    """
-    Busca historial del cliente y genera saludo personalizado.
-    Si es cliente nuevo, saludo genérico.
-    """
     historial = consultar_historial_cliente(telefono, limite=3)
 
     if not historial:
-        # Cliente nuevo
         await send_list_menu(telefono, MSG_BIENVENIDA_NUEVO, MENU_OPCIONES)
         return
 
-    # Cliente con historial — obtener nombre del último servicio
     nombre = historial[0].get("nombre", "").split()[0].capitalize() if historial else ""
 
-    # Construir resumen de últimos servicios
     lineas = []
     for cita in historial:
-        estado = ESTADOS_TEXTO.get(cita.get("estado", ""), "En proceso")
-        folio  = cita.get("folio", "-")
+        estado  = ESTADOS_TEXTO.get(cita.get("estado", ""), "En proceso")
+        folio   = cita.get("folio", "-")
         aparato = cita.get("aparato", "-")
         lineas.append(f"• {folio} — {aparato} — {estado}")
 
@@ -141,7 +147,6 @@ async def _saludo_con_historial(telefono: str) -> None:
         f"Tus ultimos servicios:\n{servicios_texto}\n\n"
         f"Como puedo ayudarte hoy?"
     )
-
     await send_list_menu(telefono, saludo, MENU_OPCIONES)
 
 
@@ -153,9 +158,14 @@ async def manejar_mensaje(telefono: str, mensaje: str) -> None:
     estado   = obtener_estado_conversacion(telefono)
     flujo    = estado.get("flujo")
 
-    # Palabras clave para reiniciar
-    if mensaje.lower() in {"menu", "inicio", "hola", "hi", "buenas", "buenos dias",
-                            "buenas tardes", "buenas noches", "empezar"}:
+    # Palabras de despedida
+    if mensaje.lower() in PALABRAS_DESPEDIDA and not flujo:
+        await send_message(telefono, MSG_DESPEDIDA)
+        limpiar_conversacion(telefono)
+        return
+
+    # Palabras de saludo / reinicio
+    if mensaje.lower() in PALABRAS_SALUDO:
         await _saludo_con_historial(telefono)
         limpiar_conversacion(telefono)
         return
@@ -173,11 +183,9 @@ async def manejar_mensaje(telefono: str, mensaje: str) -> None:
     if flujo == "cotizar":
         await _flujo_cotizar(telefono, mensaje, estado)
         return
-
     if flujo == "cotizar_refaccion":
         await _flujo_cotizar_refaccion(telefono, mensaje, estado)
         return
-
     if flujo == "transferir":
         await _flujo_transferir(telefono, mensaje, estado)
         return
@@ -245,9 +253,8 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
     elif paso == "nombre":
         datos["nombre"] = mensaje.upper()
         guardar_estado_conversacion(telefono, {**estado, "paso": "direccion", "datos": datos})
-        await send_message(telefono,
-            f"Perfecto, {mensaje}.\n\nCual es tu direccion completa?"
-        )
+        await send_message(telefono, f"Perfecto, {mensaje}.\n\nCual es tu direccion completa?")
+
     elif paso == "direccion":
         datos["direccion"] = mensaje.upper()
         guardar_estado_conversacion(telefono, {**estado, "paso": "ubicacion", "datos": datos})
@@ -289,6 +296,8 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
         limpiar_conversacion(telefono)
 
         obs_texto = f"\nObservacion: {datos['observacion']}" if datos["observacion"] else ""
+
+        # Mensaje de confirmación al cliente
         await send_message(telefono,
             f"Cita agendada con exito!\n\n"
             f"No. Orden: *{folio}*\n"
@@ -302,6 +311,25 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
             f"Guarda tu numero de orden *{folio}* para dar seguimiento.\n"
             f"Un tecnico te confirmara la visita en breve."
         )
+
+        # Notificación al taller
+        obs_taller = f"\nObservacion: {datos['observacion']}" if datos["observacion"] else ""
+        msg_taller = (
+            f"NUEVA CITA AGENDADA\n"
+            f"{'='*30}\n"
+            f"No. Orden: {folio}\n"
+            f"Nombre: {datos['nombre']}\n"
+            f"Direccion: {datos['direccion']}\n"
+            f"Ubicacion: {datos.get('ubicacion', '-')}\n"
+            f"Telefono: {datos['telefono_contacto']}\n"
+            f"Aparato: {datos['aparato']}\n"
+            f"Falla: {datos['falla']}\n"
+            f"Cita: {datos['fecha']}\n"
+            f"Cargo: {datos['cargo']}{obs_taller}\n"
+            f"{'='*30}\n"
+            f"WhatsApp cliente: {telefono}"
+        )
+        await send_message(NUMERO_TALLER, msg_taller)
 
 
 # ── Flujo: Seguimiento ────────────────────────────────────
@@ -465,11 +493,12 @@ async def _flujo_garantia(telefono: str, mensaje: str, estado: dict) -> None:
 # ── Flujo: Cotizar ────────────────────────────────────────
 
 async def _iniciar_cotizar(telefono: str) -> None:
+    guardar_estado_conversacion(telefono, {"flujo": "cotizar", "paso": "tipo"})
     await send_interactive_menu(telefono,
         "Que tipo de cotizacion necesitas?",
         [
-            {"id": "cotizar_revision",   "title": "Revision de equipo"},
-            {"id": "cotizar_refaccion",  "title": "Cotizar refaccion"},
+            {"id": "cotizar_revision",  "title": "Revision de equipo"},
+            {"id": "cotizar_refaccion", "title": "Cotizar refaccion"},
         ]
     )
 
@@ -502,7 +531,6 @@ async def _flujo_cotizar(telefono: str, mensaje: str, estado: dict) -> None:
         await _iniciar_cotizar_refaccion(telefono)
         return
 
-    # Si no reconoce, mostrar opciones de nuevo
     await send_interactive_menu(telefono,
         "Que tipo de cotizacion necesitas?",
         [
@@ -566,7 +594,6 @@ async def _flujo_cotizar_refaccion(telefono: str, mensaje: str, estado: dict) ->
         datos["telefono_contacto"] = mensaje
         limpiar_conversacion(telefono)
 
-        # Armar mensaje para el taller
         if datos.get("tiene_numero_parte"):
             detalle = f"No. de parte: {datos.get('numero_parte', '-')}"
         else:
@@ -581,15 +608,11 @@ async def _flujo_cotizar_refaccion(telefono: str, mensaje: str, estado: dict) ->
             f"{'='*30}\n"
             f"Responder al cliente por WhatsApp: {telefono}"
         )
-
-        # Notificar al taller
         await send_message(NUMERO_TALLER, msg_taller)
-
-        # Confirmar al cliente
         await send_message(telefono, MSG_ESPERA_COTIZACION)
 
 
-# ── Transferir a técnico ─────────────────────────────────
+# ── Flujo: Transferir a técnico ───────────────────────────
 
 async def _transferir_a_tecnico(telefono: str) -> None:
     guardar_estado_conversacion(telefono, {
@@ -614,20 +637,27 @@ async def _flujo_transferir(telefono: str, mensaje: str, estado: dict) -> None:
 
     elif paso == "telefono_contacto":
         datos["telefono_contacto"] = mensaje
+        guardar_estado_conversacion(telefono, {**estado, "paso": "tema", "datos": datos})
+        await send_message(telefono,
+            "Sobre que tema necesitas ayuda?\n"
+            "(ej: garantia, refaccion, reparacion, otro...)"
+        )
+
+    elif paso == "tema":
+        datos["tema"] = mensaje.upper()
         limpiar_conversacion(telefono)
 
-        # Notificar al taller
         msg_taller = (
             f"CLIENTE SOLICITA ATENCION PERSONALIZADA\n"
             f"{'='*30}\n"
             f"Nombre: {datos.get('nombre', '-')}\n"
             f"Telefono contacto: {datos.get('telefono_contacto', '-')}\n"
+            f"Tema: {datos.get('tema', '-')}\n"
             f"WhatsApp: {telefono}\n"
             f"{'='*30}\n"
             f"Responder al cliente: {telefono}"
         )
         await send_message(NUMERO_TALLER, msg_taller)
-
         await send_message(telefono, MSG_AGENTE)
 
 
