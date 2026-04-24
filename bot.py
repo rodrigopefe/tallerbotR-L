@@ -1,9 +1,10 @@
 """
 bot.py
 Lógica central del chatbot — Refrigeración y Lavadoras LG
+- Saludo personalizado con historial de últimos 3 servicios
 - Solo servicios con cargo pueden agendar
 - Garantías solo hacen seguimiento
-- Formato de orden: solo números
+- Formato folio: DDMMAA-XXXX
 - Horarios: lun-vie 9am-5pm, sáb 9am-2pm
 """
 from whatsapp import send_message, send_list_menu, send_interactive_menu
@@ -11,6 +12,7 @@ from database import (
     guardar_cita,
     consultar_cita,
     consultar_cita_por_telefono,
+    consultar_historial_cliente,
     guardar_estado_conversacion,
     obtener_estado_conversacion,
     limpiar_conversacion,
@@ -20,8 +22,8 @@ from ai import responder, detectar_intencion
 
 # ── Mensajes fijos ────────────────────────────────────────
 
-MSG_BIENVENIDA = (
-    "Hola! Soy el asistente de *Refrigeración y Lavadoras LG*.\n\n"
+MSG_BIENVENIDA_NUEVO = (
+    "Hola! Soy el asistente de *Refrigeracion y Lavadoras LG*.\n\n"
     "Como puedo ayudarte?"
 )
 
@@ -36,14 +38,6 @@ MSG_ESPERA_GARANTIA = (
     "en este chat en los proximos minutos.\n\n"
     "Si es fuera de horario, te contactamos en cuanto abramos "
     "(lun-vie 9am-5pm, sab 9am-2pm)."
-)
-
-MSG_NO_AGENDA_GARANTIA = (
-    "Los servicios de garantia son programados directamente por nosotros "
-    "a traves del sistema de cada garantia.\n\n"
-    "Si quieres consultar el estado de tu garantia selecciona *Seguimiento* "
-    "en el menu principal.\n\n"
-    "Si tienes dudas escribe *agente* para hablar con un tecnico."
 )
 
 MENU_OPCIONES = [
@@ -62,6 +56,14 @@ FAQ_RESPUESTAS = {
 }
 
 GARANTIAS_VALIDAS = {"lg", "milenia", "assurant", "garanplus", "supra"}
+
+ESTADOS_TEXTO = {
+    "pendiente":           "Pendiente de visita",
+    "en_diagnostico":      "En diagnostico",
+    "esperando_refaccion": "Esperando refaccion",
+    "listo":               "Listo para entregar",
+    "entregado":           "Entregado",
+}
 
 
 # ── Utilidad: normalizar número México ───────────────────
@@ -95,6 +97,42 @@ async def _notificar_taller_garantia(datos: dict) -> None:
     print("="*50 + "\n")
 
 
+# ── Saludo personalizado con historial ────────────────────
+
+async def _saludo_con_historial(telefono: str) -> None:
+    """
+    Busca historial del cliente y genera saludo personalizado.
+    Si es cliente nuevo, saludo genérico.
+    """
+    historial = consultar_historial_cliente(telefono, limite=3)
+
+    if not historial:
+        # Cliente nuevo
+        await send_list_menu(telefono, MSG_BIENVENIDA_NUEVO, MENU_OPCIONES)
+        return
+
+    # Cliente con historial — obtener nombre del último servicio
+    nombre = historial[0].get("nombre", "").split()[0].capitalize() if historial else ""
+
+    # Construir resumen de últimos servicios
+    lineas = []
+    for cita in historial:
+        estado = ESTADOS_TEXTO.get(cita.get("estado", ""), "En proceso")
+        folio  = cita.get("folio", "-")
+        aparato = cita.get("aparato", "-")
+        lineas.append(f"• {folio} — {aparato} — {estado}")
+
+    servicios_texto = "\n".join(lineas)
+
+    saludo = (
+        f"Hola {nombre}, bienvenido de nuevo a *Refrigeracion y Lavadoras LG*.\n\n"
+        f"Tus ultimos servicios:\n{servicios_texto}\n\n"
+        f"Como puedo ayudarte hoy?"
+    )
+
+    await send_list_menu(telefono, saludo, MENU_OPCIONES)
+
+
 # ── Manejador principal ───────────────────────────────────
 
 async def manejar_mensaje(telefono: str, mensaje: str) -> None:
@@ -103,32 +141,32 @@ async def manejar_mensaje(telefono: str, mensaje: str) -> None:
     estado   = obtener_estado_conversacion(telefono)
     flujo    = estado.get("flujo")
 
+    # Palabras clave para reiniciar
     if mensaje.lower() in {"menu", "inicio", "hola", "hi", "buenas", "buenos dias",
                             "buenas tardes", "buenas noches", "empezar"}:
-        await _mostrar_menu(telefono)
+        await _saludo_con_historial(telefono)
         limpiar_conversacion(telefono)
         return
 
+    # Flujos activos
     if flujo == "agendar":
         await _flujo_agendar(telefono, mensaje, estado)
         return
-
     if flujo == "seguimiento":
         await _flujo_seguimiento(telefono, mensaje, estado)
         return
-
     if flujo == "garantia":
         await _flujo_garantia(telefono, mensaje, estado)
         return
-
     if flujo == "cotizar":
         await _flujo_cotizar(telefono, mensaje, estado)
         return
 
+    # Detectar intención con IA
     intencion = await detectar_intencion(mensaje)
 
     if intencion == "saludo":
-        await _mostrar_menu(telefono)
+        await _saludo_con_historial(telefono)
     elif intencion == "agendar":
         await _iniciar_agendar(telefono)
     elif intencion == "cotizar":
@@ -140,21 +178,21 @@ async def manejar_mensaje(telefono: str, mensaje: str) -> None:
     elif intencion == "agente":
         await send_message(telefono, MSG_AGENTE)
     else:
-        historial = estado.get("historial", [])
-        respuesta = await responder(historial, mensaje)
-        historial.append({"role": "user", "content": mensaje})
-        historial.append({"role": "assistant", "content": respuesta})
-        guardar_estado_conversacion(telefono, {**estado, "historial": historial[-10:]})
+        hist = estado.get("historial", [])
+        respuesta = await responder(hist, mensaje)
+        hist.append({"role": "user", "content": mensaje})
+        hist.append({"role": "assistant", "content": respuesta})
+        guardar_estado_conversacion(telefono, {**estado, "historial": hist[-10:]})
         await send_message(telefono, respuesta)
 
 
 # ── Menú principal ────────────────────────────────────────
 
 async def _mostrar_menu(telefono: str) -> None:
-    await send_list_menu(telefono, MSG_BIENVENIDA, MENU_OPCIONES)
+    await _saludo_con_historial(telefono)
 
 
-# ── Flujo: Agendar cita (solo servicios con cargo) ────────
+# ── Flujo: Agendar cita ───────────────────────────────────
 
 async def _iniciar_agendar(telefono: str) -> None:
     guardar_estado_conversacion(telefono, {
@@ -177,26 +215,19 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
         datos["aparato"] = mensaje.upper()
         guardar_estado_conversacion(telefono, {**estado, "paso": "falla", "datos": datos})
         await send_message(telefono,
-            f"Anotado: *{mensaje}*.\n\n"
-            "Cual es el problema o falla que presenta?"
+            f"Anotado: *{mensaje}*.\n\nCual es el problema o falla que presenta?"
         )
-
     elif paso == "falla":
         datos["falla"] = mensaje.upper()
         guardar_estado_conversacion(telefono, {**estado, "paso": "nombre", "datos": datos})
-        await send_message(telefono,
-            "A que nombre agendamos la cita?\n"
-            "(nombre completo)"
-        )
+        await send_message(telefono, "A que nombre agendamos la cita?\n(nombre completo)")
 
     elif paso == "nombre":
         datos["nombre"] = mensaje.upper()
         guardar_estado_conversacion(telefono, {**estado, "paso": "direccion", "datos": datos})
         await send_message(telefono,
-            f"Perfecto, {mensaje}.\n\n"
-            "Cual es tu direccion completa?"
+            f"Perfecto, {mensaje}.\n\nCual es tu direccion completa?"
         )
-
     elif paso == "direccion":
         datos["direccion"] = mensaje.upper()
         guardar_estado_conversacion(telefono, {**estado, "paso": "ubicacion", "datos": datos})
@@ -205,13 +236,10 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
             "(ej: frente al mercado, entre calles, color de la casa...)\n"
             "Si no hay referencia escribe *no*"
         )
-
     elif paso == "ubicacion":
         datos["ubicacion"] = "" if mensaje.lower() == "no" else mensaje.upper()
         guardar_estado_conversacion(telefono, {**estado, "paso": "telefono", "datos": datos})
-        await send_message(telefono,
-            "Cual es tu numero de telefono de contacto?"
-        )
+        await send_message(telefono, "Cual es tu numero de telefono de contacto?")
 
     elif paso == "telefono":
         datos["telefono_contacto"] = mensaje
@@ -222,7 +250,6 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
             "Lunes a viernes: 9am - 5pm\n"
             "Sabados: 9am - 2pm"
         )
-
     elif paso == "fecha":
         datos["fecha"] = mensaje.upper()
         guardar_estado_conversacion(telefono, {**estado, "paso": "llamar_antes", "datos": datos})
@@ -233,24 +260,15 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
                 {"id": "llamar_no", "title": "No es necesario"},
             ]
         )
-
     elif paso == "llamar_antes":
         msg_lower = mensaje.lower()
-        if mensaje == "llamar_si" or "si" in msg_lower:
-            datos["observacion"] = "MARCAR 30 MIN ANTES"
-        else:
-            datos["observacion"] = ""
+        datos["observacion"] = "MARCAR 30 MIN ANTES" if (mensaje == "llamar_si" or "si" in msg_lower) else ""
+        datos["cargo"] = _precio_por_aparato(datos.get("aparato", ""))
 
-        # Calcular precio según aparato
-        precio = _precio_por_aparato(datos.get("aparato", ""))
-        datos["cargo"] = precio
-
-        # Guardar cita
         folio = guardar_cita(telefono, datos)
         limpiar_conversacion(telefono)
 
         obs_texto = f"\nObservacion: {datos['observacion']}" if datos["observacion"] else ""
-
         await send_message(telefono,
             f"Cita agendada con exito!\n\n"
             f"No. Orden: *{folio}*\n"
@@ -260,13 +278,13 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
             f"Aparato: {datos['aparato']}\n"
             f"Falla: {datos['falla']}\n"
             f"Cita: {datos['fecha']}\n"
-            f"Cargo: {precio}{obs_texto}\n\n"
+            f"Cargo: {datos['cargo']}{obs_texto}\n\n"
             f"Guarda tu numero de orden *{folio}* para dar seguimiento.\n"
             f"Un tecnico te confirmara la visita en breve."
         )
 
 
-# ── Flujo: Seguimiento (con bifurcación a garantía) ──────
+# ── Flujo: Seguimiento ────────────────────────────────────
 
 async def _iniciar_seguimiento(telefono: str) -> None:
     print(f"Iniciando seguimiento para {telefono}")
@@ -289,16 +307,12 @@ async def _flujo_seguimiento(telefono: str, mensaje: str, estado: dict) -> None:
     if paso == "pregunta_garantia":
         msg_lower = mensaje.lower().strip()
 
-        # Primero verificar ID exacto del boton
         if mensaje == "seg_si_garantia":
             await _iniciar_garantia(telefono)
             return
 
         if mensaje == "seg_no_garantia":
-            guardar_estado_conversacion(telefono, {
-                "flujo": "seguimiento",
-                "paso": "folio_normal",
-            })
+            guardar_estado_conversacion(telefono, {"flujo": "seguimiento", "paso": "folio_normal"})
             citas = consultar_cita_por_telefono(telefono)
             if citas:
                 if len(citas) == 1:
@@ -307,7 +321,7 @@ async def _flujo_seguimiento(telefono: str, mensaje: str, estado: dict) -> None:
                 else:
                     lista = "\n".join([f"Orden {c['folio']} - {c['aparato']}" for c in citas])
                     await send_message(telefono,
-                        f"Encontre estos servicios:\n\n{lista}\n\n"
+                        f"Encontre estos servicios activos:\n\n{lista}\n\n"
                         "De cual necesitas seguimiento? Escribe el numero de orden."
                     )
             else:
@@ -316,31 +330,13 @@ async def _flujo_seguimiento(telefono: str, mensaje: str, estado: dict) -> None:
                 )
             return
 
-        # Si escribio texto libre
         if msg_lower in {"si", "si garantia", "garantia"}:
             await _iniciar_garantia(telefono)
             return
 
         if msg_lower in {"no", "no garantia", "normal", "servicio normal"}:
-            guardar_estado_conversacion(telefono, {
-                "flujo": "seguimiento",
-                "paso": "folio_normal",
-            })
-            citas = consultar_cita_por_telefono(telefono)
-            if citas:
-                if len(citas) == 1:
-                    await _mostrar_estado_cita(telefono, citas[0])
-                    limpiar_conversacion(telefono)
-                else:
-                    lista = "\n".join([f"Orden {c['folio']} - {c['aparato']}" for c in citas])
-                    await send_message(telefono,
-                        f"Encontre estos servicios:\n\n{lista}\n\n"
-                        "De cual necesitas seguimiento? Escribe el numero de orden."
-                    )
-            else:
-                await send_message(telefono,
-                    "Escribe tu numero de orden para consultar tu servicio."
-                )
+            guardar_estado_conversacion(telefono, {"flujo": "seguimiento", "paso": "folio_normal"})
+            await send_message(telefono, "Escribe tu numero de orden para consultar tu servicio.")
             return
 
         await send_interactive_menu(telefono,
@@ -352,7 +348,7 @@ async def _flujo_seguimiento(telefono: str, mensaje: str, estado: dict) -> None:
         )
 
     elif paso == "folio_normal":
-        cita = consultar_cita(mensaje.upper().strip())
+        cita = consultar_cita(mensaje.strip())
         if cita:
             await _mostrar_estado_cita(telefono, cita)
         else:
@@ -365,14 +361,7 @@ async def _flujo_seguimiento(telefono: str, mensaje: str, estado: dict) -> None:
 
 
 async def _mostrar_estado_cita(telefono: str, cita: dict) -> None:
-    estados_texto = {
-        "pendiente":           "Pendiente de visita",
-        "en_diagnostico":      "En diagnostico",
-        "esperando_refaccion": "Esperando refaccion",
-        "listo":               "Listo para entregar",
-        "entregado":           "Entregado",
-    }
-    estado_texto = estados_texto.get(cita.get("estado", ""), "En proceso")
+    estado_texto = ESTADOS_TEXTO.get(cita.get("estado", ""), "En proceso")
     await send_message(telefono,
         f"No. Orden: {cita['folio']}\n"
         f"Aparato: {cita.get('aparato', '-')}\n"
@@ -412,26 +401,22 @@ async def _flujo_garantia(telefono: str, mensaje: str, estado: dict) -> None:
             if g in msg_lower:
                 garantia = g
                 break
-
         if not garantia:
             await send_message(telefono,
                 "Por favor selecciona una opcion: LG, Milenia, Assurant, GaranPlus o Supra."
             )
             return
-
         datos["garantia"] = garantia
         guardar_estado_conversacion(telefono, {**estado, "paso": "nombre", "datos": datos})
         await send_message(telefono,
-            f"Garantia {garantia.upper()} seleccionada.\n\n"
-            "Cual es tu nombre completo?"
+            f"Garantia {garantia.upper()} seleccionada.\n\nCual es tu nombre completo?"
         )
 
     elif paso == "nombre":
         datos["nombre"] = mensaje.upper()
         guardar_estado_conversacion(telefono, {**estado, "paso": "folio_garantia", "datos": datos})
         await send_message(telefono,
-            f"Gracias, {mensaje}.\n\n"
-            "Cual es tu numero de folio o reporte de garantia?"
+            f"Gracias, {mensaje}.\n\nCual es tu numero de folio o reporte de garantia?"
         )
 
     elif paso == "folio_garantia":

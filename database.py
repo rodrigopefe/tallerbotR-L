@@ -1,24 +1,20 @@
 """
 database.py - VERSION CON FIREBASE FIRESTORE
-Numero de orden: solo numeros (ej: 26041601)
-Formato: AAMMDDXX donde XX es consecutivo del dia
+Folio formato: DDMMAA-XXXX (ej: 260423-1000)
+Consecutivo global desde 1000, nunca se repite.
 """
 import json
-import random
-import string
 import os
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# Leer variables directamente con os.environ
 FIREBASE_CREDENTIALS_JSON = os.environ.get("FIREBASE_CREDENTIALS_JSON", "")
 FIREBASE_CREDENTIALS = os.environ.get("FIREBASE_CREDENTIALS", "firebase_credentials.json")
 
 print(f"Firebase JSON presente: {bool(FIREBASE_CREDENTIALS_JSON)}")
 print(f"Firebase JSON longitud: {len(FIREBASE_CREDENTIALS_JSON)}")
 
-# Inicializa Firebase solo una vez
 if not firebase_admin._apps:
     if FIREBASE_CREDENTIALS_JSON and len(FIREBASE_CREDENTIALS_JSON) > 10:
         try:
@@ -41,46 +37,47 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 
-def _generar_numero_orden() -> str:
+def _generar_folio() -> str:
     """
-    Genera número de orden solo numérico.
-    Formato: AAMMDDXXX donde XXX es consecutivo del día.
-    Ejemplo: 26041601 = año 26, mes 04, día 16, orden 01 del día.
+    Genera folio formato DDMMAA-XXXX.
+    Consecutivo global desde 1000, guardado en Firebase.
+    Ejemplo: 260423-1000
     """
-    hoy = datetime.now()
-    prefijo = hoy.strftime("%y%m%d")
+    hoy = datetime.now().strftime("%d%m%y")
 
-    # Buscar cuántas órdenes hay hoy para el consecutivo
-    try:
-        inicio_dia = hoy.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        docs = (
-            db.collection("citas")
-            .where("fecha_creacion", ">=", inicio_dia)
-            .stream()
-        )
-        count = sum(1 for _ in docs) + 1
-    except Exception:
-        count = random.randint(1, 99)
+    # Documento contador en Firebase
+    contador_ref = db.collection("config").document("contador_folios")
 
-    return f"{prefijo}{count:02d}"
+    @firestore.transactional
+    def incrementar(transaction):
+        doc = contador_ref.get(transaction=transaction)
+        if doc.exists:
+            nuevo = doc.get("ultimo") + 1
+        else:
+            nuevo = 1000
+        transaction.set(contador_ref, {"ultimo": nuevo})
+        return nuevo
+
+    transaction = db.transaction()
+    consecutivo = incrementar(transaction)
+    return f"{hoy}-{consecutivo}"
 
 
 # ── Citas ────────────────────────────────────────────────
 
 def guardar_cita(telefono: str, datos: dict) -> str:
-    """Guarda una nueva cita y devuelve el número de orden."""
-    numero_orden = _generar_numero_orden()
+    folio = _generar_folio()
     doc = {
         **datos,
-        "folio": numero_orden,
+        "folio": folio,
         "telefono": telefono,
         "estado": "pendiente",
         "fecha_creacion": datetime.now().isoformat(),
         "fecha_actualizacion": datetime.now().isoformat(),
     }
-    db.collection("citas").document(numero_orden).set(doc)
-    print(f"Cita guardada: {numero_orden} - {datos.get('aparato')} para {datos.get('nombre')}")
-    return numero_orden
+    db.collection("citas").document(folio).set(doc)
+    print(f"Cita guardada: {folio} - {datos.get('aparato')} para {datos.get('nombre')}")
+    return folio
 
 
 def consultar_cita(folio: str) -> dict | None:
@@ -98,7 +95,26 @@ def consultar_cita_por_telefono(telefono: str) -> list[dict]:
         )
         return [d.to_dict() for d in docs]
     except Exception as e:
-        print(f"Error consultando citas: {e}")
+        print(f"Error consultando citas activas: {e}")
+        return []
+
+
+def consultar_historial_cliente(telefono: str, limite: int = 3) -> list[dict]:
+    """
+    Obtiene los últimos N servicios del cliente (incluyendo entregados).
+    Ordenados del más reciente al más antiguo.
+    """
+    try:
+        docs = (
+            db.collection("citas")
+            .where("telefono", "==", telefono)
+            .order_by("fecha_creacion", direction=firestore.Query.DESCENDING)
+            .limit(limite)
+            .stream()
+        )
+        return [d.to_dict() for d in docs]
+    except Exception as e:
+        print(f"Error consultando historial: {e}")
         return []
 
 
@@ -116,7 +132,6 @@ def actualizar_estado(folio: str, nuevo_estado: str) -> bool:
 
 
 def guardar_garantia(datos: dict) -> str:
-    """Guarda una consulta de garantía en Firestore."""
     folio = f"GAR{datetime.now().strftime('%y%m%d%H%M%S')}"
     doc = {
         **datos,
@@ -130,14 +145,8 @@ def guardar_garantia(datos: dict) -> str:
 
 
 def obtener_citas_del_dia(fecha: str = None) -> list[dict]:
-    """
-    Obtiene todas las citas de un día específico.
-    fecha: string en formato 'YYYY-MM-DD', si es None usa hoy.
-    Usado para el correo automático diario.
-    """
     if not fecha:
         fecha = datetime.now().strftime("%Y-%m-%d")
-
     try:
         inicio = f"{fecha}T00:00:00"
         fin    = f"{fecha}T23:59:59"
