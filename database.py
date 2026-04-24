@@ -43,7 +43,9 @@ def _generar_folio() -> str:
     Consecutivo global desde 1000, guardado en Firebase.
     Ejemplo: 260423-1000
     """
-    hoy = datetime.now().strftime("%d%m%y")
+    from datetime import timezone, timedelta
+    mx_tz = timezone(timedelta(hours=-5))  # UTC-5 Mexico horario verano
+    hoy = datetime.now(mx_tz).strftime("%d%m%y")
 
     # Documento contador en Firebase
     contador_ref = db.collection("config").document("contador_folios")
