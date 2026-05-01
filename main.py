@@ -122,6 +122,16 @@ async def recibir_mensaje(request: Request):
             elif inter_type == "list_reply":
                 opcion_id = interactive["list_reply"]["id"]
                 await manejar_mensaje(telefono, opcion_id)
+        elif tipo == "location":
+            # Cliente compartió su ubicación GPS
+            location     = mensaje_data.get("location", {})
+            latitud      = location.get("latitude", "")
+            longitud     = location.get("longitude", "")
+            maps_link    = f"https://maps.google.com/?q={latitud},{longitud}"
+            print(f"📍 Ubicación recibida: {latitud}, {longitud}")
+            # Pasar la ubicación como texto especial al bot
+            await manejar_mensaje(telefono, f"GPS:{latitud},{longitud}:{maps_link}")
+
         else:
             logger.info(f"Tipo de mensaje no manejado: {tipo}")
 

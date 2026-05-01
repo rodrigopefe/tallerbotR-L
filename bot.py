@@ -260,9 +260,10 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
         datos["cargo"] = precio
         guardar_estado_conversacion(telefono, {**estado, "paso": "confirmar_costo", "datos": datos})
         await send_interactive_menu(telefono,
-            f"El costo de revisión a domicilio dentro de la ciudad de Puebla es:\n\n"
+            f"El costo de la visita a domicilio dentro de la ciudad de Puebla es:\n\n"
             f"{precio_texto}\n\n"
-            f"Este costo incluye diagnóstico y mano de obra.\n\n"
+            f"Este costo es únicamente por la revisión y diagnóstico del equipo.\n"
+            f"Si se requiere reparación, se cotiza aparte.\n\n"
             f"¿Deseas continuar con el agendado?",
             [
                 {"id": "confirmar_si", "title": "Sí, continuar"},
@@ -326,15 +327,41 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
 
     elif paso == "color_fachada":
         datos["color_fachada"] = mensaje.upper()
-        guardar_estado_conversacion(telefono, {**estado, "paso": "ubicacion", "datos": datos})
+        guardar_estado_conversacion(telefono, {**estado, "paso": "ubicacion_texto", "datos": datos})
         await send_message(telefono,
             "¿Hay alguna referencia adicional para llegar?\n"
             "(ej: frente al mercado, junto a la farmacia...)\n"
             "Si no hay, escribe *no*"
         )
 
-    elif paso == "ubicacion":
+    elif paso == "ubicacion_texto":
         datos["ubicacion"] = "" if mensaje.lower() == "no" else mensaje.upper()
+        guardar_estado_conversacion(telefono, {**estado, "paso": "ubicacion_gps", "datos": datos})
+        await send_message(telefono,
+            "Por último, comparte tu ubicación de WhatsApp para que el técnico llegue fácilmente.\n\n"
+            "Toca el clip 📎 → *Ubicación* → *Compartir ubicación actual*\n\n"
+            "Si prefieres no compartirla escribe *no*"
+        )
+
+    elif paso == "ubicacion_gps":
+        # Detectar si es ubicación GPS real (formato GPS:lat,lng:link)
+        if mensaje.startswith("GPS:"):
+            partes = mensaje.split(":")
+            coords = partes[1] if len(partes) > 1 else ""
+            link   = partes[2] if len(partes) > 2 else ""
+            datos["ubicacion_gps"]   = coords
+            datos["ubicacion_maps"]  = f"https://maps.google.com/?q={coords}" if coords else link
+            print(f"📍 GPS guardado: {coords}")
+        elif mensaje.lower() == "no":
+            datos["ubicacion_gps"]  = ""
+            datos["ubicacion_maps"] = ""
+        else:
+            # Cliente escribió texto en vez de compartir ubicación
+            datos["ubicacion_gps"]  = ""
+            datos["ubicacion_maps"] = ""
+
+        guardar_estado_conversacion(telefono, {**estado, "paso": "telefono", "datos": datos})
+        await send_message(telefono, "¿Cuál es tu número de teléfono de contacto?")
 
         # Construir dirección completa
         direccion = (
@@ -405,6 +432,9 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
 
         # Notificación al taller
         obs_taller = f"\nObservación: {datos['observacion']}" if datos["observacion"] else ""
+        maps_link = datos.get('ubicacion_maps', '')
+        maps_texto = f"\nMaps: {maps_link}" if maps_link else ""
+
         msg_taller = (
             f"NUEVA CITA AGENDADA\n"
             f"{'='*30}\n"
@@ -414,7 +444,7 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
             f"Entre: {datos.get('entre_calles', '-')}\n"
             f"Colonia: {datos.get('colonia', '-')}\n"
             f"Fachada: {datos.get('color_fachada', '-')}\n"
-            f"Referencia: {datos.get('ubicacion', '-')}\n"
+            f"Referencia: {datos.get('ubicacion', '-')}{maps_texto}\n"
             f"Teléfono: {datos['telefono_contacto']}\n"
             f"Aparato: {datos['aparato']}\n"
             f"Falla: {datos['falla']}\n"
