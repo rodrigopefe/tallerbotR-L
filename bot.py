@@ -234,13 +234,16 @@ async def _mostrar_menu(telefono: str) -> None:
 async def _iniciar_agendar(telefono: str) -> None:
     guardar_estado_conversacion(telefono, {
         "flujo": "agendar",
-        "paso": "aparato",
+        "paso": "ciudad",
         "datos": {},
     })
-    await send_message(telefono,
+    await send_interactive_menu(telefono,
         "Vamos a agendar tu cita de servicio.\n\n"
-        "¿Qué aparato necesitas reparar?\n"
-        "(ej: lavadora, refrigerador, pantalla, estufa, aire acondicionado...)"
+        "¿El servicio es dentro de la ciudad de Puebla?",
+        [
+            {"id": "ciudad_si", "title": "Sí, es en Puebla"},
+            {"id": "ciudad_no", "title": "No, es fuera de Puebla"},
+        ]
     )
 
 
@@ -253,6 +256,208 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
         await send_message(telefono, "Por favor escribe una respuesta para continuar.")
         return
 
+    if paso == "ciudad":
+        msg_lower = mensaje.lower()
+        if mensaje == "ciudad_si" or "si" in msg_lower or "sí" in msg_lower:
+            guardar_estado_conversacion(telefono, {**estado, "paso": "categoria", "datos": datos})
+            await send_list_menu(telefono,
+                "¿Qué categoría de equipo necesitas reparar?",
+                [
+                    {"id": "cat_blanca",  "title": "Línea Blanca",          "description": "Refrigerador, lavadora, secadora..."},
+                    {"id": "cat_electro", "title": "Electrónica",           "description": "Pantallas, componentes..."},
+                    {"id": "cat_aire",    "title": "Aire Acondicionado",    "description": "Minisplit"},
+                    {"id": "cat_otro",    "title": "No encontré mi equipo", "description": "Otro equipo"},
+                ]
+            )
+        elif mensaje == "ciudad_no" or "no" in msg_lower:
+            guardar_estado_conversacion(telefono, {**estado, "paso": "fuera_nombre", "datos": datos})
+            await send_message(telefono,
+                "Entendido, el servicio es fuera de Puebla.\n\n"
+                "¿Cuál es tu nombre completo?"
+            )
+        else:
+            await send_interactive_menu(telefono,
+                "¿El servicio es dentro de la ciudad de Puebla?",
+                [
+                    {"id": "ciudad_si", "title": "Sí, es en Puebla"},
+                    {"id": "ciudad_no", "title": "No, es fuera de Puebla"},
+                ]
+            )
+        return
+
+    elif paso == "fuera_nombre":
+        datos["nombre"] = mensaje.upper()
+        guardar_estado_conversacion(telefono, {**estado, "paso": "fuera_telefono", "datos": datos})
+        await send_message(telefono, "¿Cuál es tu número de teléfono de contacto?")
+        return
+
+    elif paso == "fuera_telefono":
+        datos["telefono_contacto"] = mensaje
+        limpiar_conversacion(telefono)
+        msg_taller = (
+            f"SERVICIO FUERA DE PUEBLA\n"
+            f"{'='*30}\n"
+            f"Nombre: {datos.get('nombre', '-')}\n"
+            f"Teléfono: {datos.get('telefono_contacto', '-')}\n"
+            f"WhatsApp: {telefono}\n"
+            f"{'='*30}\n"
+            f"El cliente solicita servicio fuera de Puebla."
+        )
+        await send_message(NUMERO_TALLER, msg_taller)
+        await send_message(telefono,
+            "Gracias por tu información.\n\n"
+            "En unos momentos uno de nuestros técnicos se pondrá en contacto contigo "
+            "para coordinar el servicio. 🔧"
+        )
+        return
+
+    if paso == "categoria":
+        # Selección de categoría
+        categorias = {
+            "cat_blanca":   "Línea Blanca",
+            "cat_electro":  "Electrónica",
+            "cat_aire":     "Aire Acondicionado / Minisplit",
+            "cat_otro":     "Otro",
+        }
+        if mensaje in categorias:
+            if mensaje == "cat_blanca":
+                guardar_estado_conversacion(telefono, {**estado, "paso": "equipo_blanca", "datos": datos})
+                await send_list_menu(telefono,
+                    "¿Qué equipo de línea blanca necesitas reparar?",
+                    [
+                        {"id": "eq_refrigerador",   "title": "Refrigerador",      "description": ""},
+                        {"id": "eq_lavadora",        "title": "Lavadora",          "description": ""},
+                        {"id": "eq_secadora",        "title": "Secadora",          "description": ""},
+                        {"id": "eq_centro_lavado",   "title": "Centro de lavado",  "description": ""},
+                        {"id": "eq_torre_lavado",    "title": "Torre de lavado",   "description": ""},
+                    ]
+                )
+            elif mensaje == "cat_electro":
+                guardar_estado_conversacion(telefono, {**estado, "paso": "equipo_electro", "datos": datos})
+                await send_interactive_menu(telefono,
+                    "¿Qué equipo electrónico necesitas reparar?",
+                    [
+                        {"id": "eq_pantalla",    "title": "Pantalla / TV"},
+                        {"id": "eq_componentes", "title": "Componentes"},
+                    ]
+                )
+            elif mensaje == "cat_aire":
+                datos["aparato"] = "MINISPLIT / AIRE ACONDICIONADO"
+                datos["cargo"]   = "$750.00"
+                guardar_estado_conversacion(telefono, {**estado, "paso": "confirmar_costo", "datos": datos})
+                await send_interactive_menu(telefono,
+                    "El costo de la visita a domicilio dentro de la ciudad de Puebla es:\n\n"
+                    "Minisplit / Aire acondicionado: *$750 MXN*\n\n"
+                    "Este costo es por la visita y el diagnóstico del técnico.\n"
+                    "Si se requiere reparación, se cotiza aparte.\n\n"
+                    "¿Deseas continuar con el agendado?",
+                    [
+                        {"id": "confirmar_si", "title": "Sí, continuar"},
+                        {"id": "confirmar_no", "title": "No, cancelar"},
+                    ]
+                )
+            elif mensaje == "cat_otro":
+                guardar_estado_conversacion(telefono, {**estado, "paso": "aparato_otro", "datos": datos})
+                await send_message(telefono,
+                    "¿Qué equipo necesitas reparar? Escríbelo a continuación:"
+                )
+        else:
+            await send_list_menu(telefono,
+                "¿Qué categoría de equipo necesitas reparar?",
+                [
+                    {"id": "cat_blanca",  "title": "Línea Blanca",              "description": "Refrigerador, lavadora, secadora..."},
+                    {"id": "cat_electro", "title": "Electrónica",               "description": "Pantallas, componentes..."},
+                    {"id": "cat_aire",    "title": "Aire Acondicionado",        "description": "Minisplit"},
+                    {"id": "cat_otro",    "title": "No encontré mi equipo",     "description": "Otro equipo"},
+                ]
+            )
+        return
+
+    elif paso == "equipo_blanca":
+        equipos = {
+            "eq_refrigerador": ("REFRIGERADOR", "$550.00", "Refrigerador: *$550 MXN*"),
+            "eq_lavadora":     ("LAVADORA",     "$450.00", "Lavadora: *$450 MXN*"),
+            "eq_secadora":     ("SECADORA",     "$450.00", "Secadora: *$450 MXN*"),
+            "eq_centro_lavado":("CENTRO DE LAVADO", "$450.00", "Centro de lavado: *$450 MXN*"),
+            "eq_torre_lavado": ("TORRE DE LAVADO",  "$450.00", "Torre de lavado: *$450 MXN*"),
+        }
+        if mensaje in equipos:
+            nombre, precio, precio_txt = equipos[mensaje]
+            datos["aparato"] = nombre
+            datos["cargo"]   = precio
+            guardar_estado_conversacion(telefono, {**estado, "paso": "confirmar_costo", "datos": datos})
+            await send_interactive_menu(telefono,
+                f"El costo de la visita a domicilio dentro de la ciudad de Puebla es:\n\n"
+                f"{precio_txt}\n\n"
+                f"Este costo es por la visita y el diagnóstico del técnico.\n"
+                f"Si se requiere reparación, se cotiza aparte.\n\n"
+                f"¿Deseas continuar con el agendado?",
+                [
+                    {"id": "confirmar_si", "title": "Sí, continuar"},
+                    {"id": "confirmar_no", "title": "No, cancelar"},
+                ]
+            )
+        else:
+            await send_list_menu(telefono,
+                "¿Qué equipo de línea blanca necesitas reparar?",
+                [
+                    {"id": "eq_refrigerador",  "title": "Refrigerador",     "description": ""},
+                    {"id": "eq_lavadora",       "title": "Lavadora",         "description": ""},
+                    {"id": "eq_secadora",       "title": "Secadora",         "description": ""},
+                    {"id": "eq_centro_lavado",  "title": "Centro de lavado", "description": ""},
+                    {"id": "eq_torre_lavado",   "title": "Torre de lavado",  "description": ""},
+                ]
+            )
+        return
+
+    elif paso == "equipo_electro":
+        equipos_electro = {
+            "eq_pantalla":    ("PANTALLA / TV",  "$450.00", "Pantalla / TV: *$450 MXN*"),
+            "eq_componentes": ("COMPONENTES",    "$450.00", "Componentes: *$450 MXN*"),
+        }
+        if mensaje in equipos_electro:
+            nombre, precio, precio_txt = equipos_electro[mensaje]
+            datos["aparato"] = nombre
+            datos["cargo"]   = precio
+            guardar_estado_conversacion(telefono, {**estado, "paso": "confirmar_costo", "datos": datos})
+            await send_interactive_menu(telefono,
+                f"El costo de la visita a domicilio dentro de la ciudad de Puebla es:\n\n"
+                f"{precio_txt}\n\n"
+                f"Este costo es por la visita y el diagnóstico del técnico.\n"
+                f"Si se requiere reparación, se cotiza aparte.\n\n"
+                f"¿Deseas continuar con el agendado?",
+                [
+                    {"id": "confirmar_si", "title": "Sí, continuar"},
+                    {"id": "confirmar_no", "title": "No, cancelar"},
+                ]
+            )
+        else:
+            await send_interactive_menu(telefono,
+                "¿Qué equipo electrónico necesitas reparar?",
+                [
+                    {"id": "eq_pantalla",    "title": "Pantalla / TV"},
+                    {"id": "eq_componentes", "title": "Componentes"},
+                ]
+            )
+        return
+
+    elif paso == "aparato_otro":
+        datos["aparato"] = mensaje.upper()
+        datos["cargo"]   = "$450.00"
+        guardar_estado_conversacion(telefono, {**estado, "paso": "confirmar_costo", "datos": datos})
+        await send_interactive_menu(telefono,
+            f"El costo de la visita a domicilio dentro de la ciudad de Puebla es:\n\n"
+            f"{mensaje.capitalize()}: *$450 MXN*\n\n"
+            f"Este costo es por la visita y el diagnóstico del técnico.\n"
+            f"Si se requiere reparación, se cotiza aparte.\n\n"
+            f"¿Deseas continuar con el agendado?",
+            [
+                {"id": "confirmar_si", "title": "Sí, continuar"},
+                {"id": "confirmar_no", "title": "No, cancelar"},
+            ]
+        )
+        return
+
     if paso == "aparato":
         datos["aparato"] = mensaje.upper()
         precio = _precio_por_aparato(mensaje)
@@ -262,7 +467,7 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
         await send_interactive_menu(telefono,
             f"El costo de la visita a domicilio dentro de la ciudad de Puebla es:\n\n"
             f"{precio_texto}\n\n"
-            f"Este costo es únicamente por la revisión y diagnóstico del equipo.\n"
+            f"Este costo es por la visita y el diagnóstico del técnico.\n"
             f"Si se requiere reparación, se cotiza aparte.\n\n"
             f"¿Deseas continuar con el agendado?",
             [
@@ -359,9 +564,6 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
             # Cliente escribió texto en vez de compartir ubicación
             datos["ubicacion_gps"]  = ""
             datos["ubicacion_maps"] = ""
-
-        guardar_estado_conversacion(telefono, {**estado, "paso": "telefono", "datos": datos})
-        await send_message(telefono, "¿Cuál es tu número de teléfono de contacto?")
 
         # Construir dirección completa
         direccion = (
