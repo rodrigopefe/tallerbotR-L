@@ -241,8 +241,8 @@ async def _iniciar_agendar(telefono: str) -> None:
         "Vamos a agendar tu cita de servicio.\n\n"
         "¿El servicio es dentro de la ciudad de Puebla?",
         [
-            {"id": "ciudad_si", "title": "Sí, es en Puebla"},
-            {"id": "ciudad_no", "title": "No, es fuera de Puebla"},
+            {"id": "ciudad_si", "title": "Sí, en Puebla"},
+            {"id": "ciudad_no", "title": "Fuera de Puebla"},
         ]
     )
 
@@ -266,7 +266,7 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
                     {"id": "cat_blanca",  "title": "Línea Blanca",          "description": "Refrigerador, lavadora, secadora..."},
                     {"id": "cat_electro", "title": "Electrónica",           "description": "Pantallas, componentes..."},
                     {"id": "cat_aire",    "title": "Aire Acondicionado",    "description": "Minisplit"},
-                    {"id": "cat_otro",    "title": "No encontré mi equipo", "description": "Otro equipo"},
+                    {"id": "cat_otro",    "title": "Otro equipo", "description": "Otro equipo"},
                 ]
             )
         elif mensaje == "ciudad_no" or "no" in msg_lower:
@@ -279,8 +279,8 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
             await send_interactive_menu(telefono,
                 "¿El servicio es dentro de la ciudad de Puebla?",
                 [
-                    {"id": "ciudad_si", "title": "Sí, es en Puebla"},
-                    {"id": "ciudad_no", "title": "No, es fuera de Puebla"},
+                    {"id": "ciudad_si", "title": "Sí, en Puebla"},
+                    {"id": "ciudad_no", "title": "Fuera de Puebla"},
                 ]
             )
         return
@@ -368,7 +368,7 @@ async def _flujo_agendar(telefono: str, mensaje: str, estado: dict) -> None:
                     {"id": "cat_blanca",  "title": "Línea Blanca",              "description": "Refrigerador, lavadora, secadora..."},
                     {"id": "cat_electro", "title": "Electrónica",               "description": "Pantallas, componentes..."},
                     {"id": "cat_aire",    "title": "Aire Acondicionado",        "description": "Minisplit"},
-                    {"id": "cat_otro",    "title": "No encontré mi equipo",     "description": "Otro equipo"},
+                    {"id": "cat_otro",    "title": "Otro equipo",     "description": "Otro equipo"},
                 ]
             )
         return
